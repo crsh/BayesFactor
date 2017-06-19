@@ -46,9 +46,20 @@ setValidity("BFBayesFactor", function(object){
 
 #' @rdname recompute-methods
 #' @aliases recompute,BFBayesFactor-method
-setMethod("recompute", "BFBayesFactor", function(x, progress = getOption('BFprogress', interactive()), multicore = FALSE, callback = function(...) as.integer(0), ...){
+setMethod("recompute", "BFBayesFactor", function(x, progress = getOption('BFprogress', interactive()), maxError = NULL, maxAttempts = 10, multicore = FALSE, callback = function(...) as.integer(0), ...){
 
-  modelList = c(x@numerator,x@denominator)
+  if(is.null(maxError)){
+    modelList = c(x@denominator,x@numerator)
+  }else{
+    if(all(x@bayesFactor$error <= maxError)) {
+      return(x)
+    }else{
+      maxErrorModel <- maxError * sqrt(2) / 2
+      numeratorError = vapply(x@numerator, function(y) y@analysis$properror, FUN.VALUE = 1)
+      modelList = c(x@denominator,x@numerator[numeratorError > maxErrorModel])
+    }
+  }
+
 
   if(multicore){
     callback = function(...) as.integer(0)
@@ -60,10 +71,24 @@ setMethod("recompute", "BFBayesFactor", function(x, progress = getOption('BFprog
     if(foreach::getDoParWorkers()==1){
       warning("Multicore specified, but only using 1 core. Set options(cores) to something >1.")
     }
-    bfs = foreach::"%dopar%"(
-      foreach::foreach(gIndex=modelList, .options.multicore=mcoptions),
-      compare(numerator = gIndex, data = x@data, ...)
-    )
+    if(is.null(maxError)){
+      bfs = foreach::"%dopar%"(
+        foreach::foreach(gIndex=modelList, .options.multicore=mcoptions),
+        compare(numerator = gIndex, data = x@data, ...)
+      )
+    }else{
+      bfs = foreach::"%dopar%"(
+        foreach::foreach(gIndex=modelList, .options.multicore=mcoptions), {
+          attempt <- 1
+          recomputedModel <- compare(numerator = gIndex, data = x@data, ...)
+          while(attempt < maxAttempts && recomputedModel@numerator[[1]]@analysis$properror > maxErrorModel) {
+            attempt <- attempt + 1
+            recomputedModel <- compare(numerator = recomputedModel@numerator[[1]], data = x@data, ...)
+          }
+          recomputedModel
+        }
+      )
+    }
 
   }else{ # No multicore
     checkCallback(callback,as.integer(0))
@@ -79,17 +104,38 @@ setMethod("recompute", "BFBayesFactor", function(x, progress = getOption('BFprog
       pb = NULL
     }
     for(i in 1:length(modelList)){
-      oneModel <- compare(numerator = modelList[[i]], data = x@data, progress=FALSE, callback=myCallback, ...)
-      if(inherits(pb,"txtProgressBar")) setTxtProgressBar(pb, i)
-      bfs = c(bfs,oneModel)
+      if(is.null(maxError)){
+        oneModel <- compare(numerator = modelList[[i]], data = x@data, progress=FALSE, callback=myCallback, ...)
+        if(inherits(pb,"txtProgressBar")) setTxtProgressBar(pb, i)
+        bfs = c(bfs,oneModel)
+      }else{
+        attempt <- 1
+        recomputedModel <- compare(numerator = modelList[[i]], data = x@data, progress=FALSE, callback=myCallback, ...)
+        while(attempt < maxAttempts && recomputedModel@numerator[[1]]@analysis$properror > maxErrorModel) {
+          attempt <- attempt + 1
+          recomputedModel <- compare(numerator = recomputedModel@numerator[[1]], data = x@data, progress=FALSE, callback=myCallback, ...)
+        }
+        if(inherits(pb,"txtProgressBar")) setTxtProgressBar(pb, i)
+        if(i == 1) {
+          maxErrorModel = sqrt(abs(maxError^2 - recomputedModel@numerator[[1]]@analysis$properror^2))
+        }
+        bfs = c(bfs,recomputedModel)
+      }
     }
     if(inherits(pb,"txtProgressBar")) close(pb)
     checkCallback(callback,as.integer(1000))
   }
 
+  if(!is.null(maxError)){
+    recomputedErrors <- vapply(bfs, function(y) y@numerator[[1]]@analysis$properror, FUN.VALUE = 1)
+    if(any(recomputedErrors[-1] > maxErrorModel)){
+      warning("Exceeded maximum attempts (", maxAttempts, ") to reach estimation error threshold (", maxError, ") on ", sum(recomputedErrors[-1] > maxErrorModel), " model(s).")
+    }
+  }
+
   joined = do.call("c", bfs)
-  numerators = joined[ 1:(length(joined)-1) ]
-  denominator = joined[ length(joined) ]
+  numerators = joined[ 2:length(joined) ]
+  denominator = joined[ 1 ]
   return(numerators / denominator)
 })
 

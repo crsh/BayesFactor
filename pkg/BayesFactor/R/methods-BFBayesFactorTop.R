@@ -75,8 +75,8 @@ setMethod('summary', "BFBayesFactorTop", function(object){
 
 #' @rdname recompute-methods
 #' @aliases recompute,BFBayesFactor-method
-setMethod("recompute", "BFBayesFactorTop", function(x, progress = getOption('BFprogress', interactive()), multicore = FALSE, callback = function(...) as.integer(0), ...){
-  bf = recompute(as.BFBayesFactor(x), progress, multicore, callback, ...)
+setMethod("recompute", "BFBayesFactorTop", function(x, progress = getOption('BFprogress', interactive()), maxError = NULL, maxAttempts = 10, multicore = FALSE, callback = function(...) as.integer(0), ...){
+  bf = recompute(as.BFBayesFactor(x), progress, maxError, maxAttempts, multicore, callback, ...)
   BFBayesFactorTop(bf)
 })
 
