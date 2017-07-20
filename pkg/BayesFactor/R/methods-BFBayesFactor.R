@@ -56,7 +56,8 @@ setMethod("recompute", "BFBayesFactor", function(x, progress = getOption('BFprog
     }else{
       maxErrorModel <- maxError * sqrt(2) / 2
       numeratorError = vapply(x@numerator, function(y) y@analysis$properror, FUN.VALUE = 1)
-      modelList = c(x@denominator,x@numerator[numeratorError > maxErrorModel])
+      preciseEstimates = numeratorError <= maxErrorModel
+      modelList = c(x@denominator,x@numerator[!preciseEstimates])
     }
   }
 
@@ -134,7 +135,8 @@ setMethod("recompute", "BFBayesFactor", function(x, progress = getOption('BFprog
   }
 
   joined = do.call("c", bfs)
-  numerators = joined[ 2:length(joined) ]
+  numerators = x@numerator
+  numerators[!preciseEstimates] = joined[ 2:length(joined) ]
   denominator = joined[ 1 ]
   return(numerators / denominator)
 })
