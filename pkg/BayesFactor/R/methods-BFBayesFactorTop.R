@@ -1,6 +1,6 @@
 BFBayesFactorTop <- function(bf){
   if( class(bf@denominator) != "BFlinearModel" )
-    stop("BFBayesFactorTopcan only be created from linear model objects.")
+    stop("BFBayesFactorTop can only be created from linear model objects.")
 
   len = sapply(bf@numerator, function(m){
     fmla = formula(m@identifier$formula)

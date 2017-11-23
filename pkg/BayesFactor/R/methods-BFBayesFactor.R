@@ -54,13 +54,19 @@ setMethod("recompute", "BFBayesFactor", function(x, progress = getOption('BFprog
     if(all(x@bayesFactor$error <= maxError)) {
       return(x)
     }else{
-      maxErrorModel <- maxError * sqrt(2) / 2
+      maxErrorPerModel = maxError * sqrt(2) / 2
+      # modelList = c()
+      # preciseDenominatorModel = x@denominator@analysis$properror < maxErrorPerModel
+      # if(preciseDenominatorModel) {
+      #   maxErrorPerModel = sqrt(abs(maxError^2 - x@denominator@analysis$properror^2))
+      # } else {
+      #   modelList = c(modelList,x@denominator)
+      # }
       numeratorError = vapply(x@numerator, function(y) y@analysis$properror, FUN.VALUE = 1)
-      preciseEstimates = numeratorError <= maxErrorModel
-      modelList = c(x@denominator,x@numerator[!preciseEstimates])
+      preciseNumeratorModels = numeratorError <= maxErrorPerModel
+      modelList = c(x@denominator,x@numerator[!preciseNumeratorModels])
     }
   }
-
 
   if(multicore){
     callback = function(...) as.integer(0)
@@ -82,13 +88,14 @@ setMethod("recompute", "BFBayesFactor", function(x, progress = getOption('BFprog
         foreach::foreach(gIndex=modelList, .options.multicore=mcoptions), {
           attempt <- 1
           recomputedModel <- compare(numerator = gIndex, data = x@data, ...)
-          while(attempt < maxAttempts && recomputedModel@numerator[[1]]@analysis$properror > maxErrorModel) {
+          while(attempt < maxAttempts && recomputedModel@numerator[[1]]@analysis$properror > maxErrorPerModel) {
             attempt <- attempt + 1
             recomputedModel <- compare(numerator = recomputedModel@numerator[[1]], data = x@data, ...)
           }
           recomputedModel
         }
       )
+      # bfs = c(bfs,x@numerator[preciseNumeratorModels])
     }
 
   }else{ # No multicore
@@ -104,41 +111,48 @@ setMethod("recompute", "BFBayesFactor", function(x, progress = getOption('BFprog
     }else{
       pb = NULL
     }
-    for(i in 1:length(modelList)){
-      if(is.null(maxError)){
+    if(is.null(maxError)){
+      for(i in 1:length(modelList)){
         oneModel <- compare(numerator = modelList[[i]], data = x@data, progress=FALSE, callback=myCallback, ...)
         if(inherits(pb,"txtProgressBar")) setTxtProgressBar(pb, i)
         bfs = c(bfs,oneModel)
-      }else{
+      }
+    }else{
+      for(i in 1:length(modelList)){
         attempt <- 1
-        recomputedModel <- compare(numerator = modelList[[i]], data = x@data, progress=FALSE, callback=myCallback, ...)
-        while(attempt < maxAttempts && recomputedModel@numerator[[1]]@analysis$properror > maxErrorModel) {
+        oneModel <- compare(numerator = modelList[[i]], data = x@data, progress=FALSE, callback=myCallback, ...)
+        while(attempt < maxAttempts && oneModel@numerator[[1]]@analysis$properror > maxErrorPerModel) {
           attempt <- attempt + 1
-          recomputedModel <- compare(numerator = recomputedModel@numerator[[1]], data = x@data, progress=FALSE, callback=myCallback, ...)
+          oneModel <- compare(numerator = oneModel@numerator[[1]], data = x@data, progress=FALSE, callback=myCallback, ...)
+        }
+        if(i == 1) { # !preciseDenominatorModel &&
+          maxErrorPerModel = sqrt(abs(maxError^2 - oneModel@numerator[[1]]@analysis$properror^2))
         }
         if(inherits(pb,"txtProgressBar")) setTxtProgressBar(pb, i)
-        if(i == 1) {
-          maxErrorModel = sqrt(abs(maxError^2 - recomputedModel@numerator[[1]]@analysis$properror^2))
-        }
-        bfs = c(bfs,recomputedModel)
+        bfs = c(bfs,oneModel)
       }
+      # bfs = c(bfs,x@numerator[preciseNumeratorModels])
     }
     if(inherits(pb,"txtProgressBar")) close(pb)
     checkCallback(callback,as.integer(1000))
   }
 
-  if(!is.null(maxError)){
-    recomputedErrors <- vapply(bfs, function(y) y@numerator[[1]]@analysis$properror, FUN.VALUE = 1)
-    if(any(recomputedErrors[-1] > maxErrorModel)){
-      warning("Exceeded maximum attempts (", maxAttempts, ") to reach estimation error threshold (", maxError, ") on ", sum(recomputedErrors[-1] > maxErrorModel), " model(s).")
-    }
+  joined = do.call("c", bfs)
+  numerators = joined[ 2:length(joined) ]
+  denominator = joined[ 1 ]
+  recomputedResult = numerators / denominator
+  if(!is.null(maxError) && any(preciseNumeratorModels)) {
+    recomputedResult = c(recomputedResult, x[preciseNumeratorModels])[names(x)$numerator] # DEVIDE BY NEW NUMERATOR
   }
 
-  joined = do.call("c", bfs)
-  numerators = x@numerator
-  numerators[!preciseEstimates] = joined[ 2:length(joined) ]
-  denominator = joined[ 1 ]
-  return(numerators / denominator)
+  if(!is.null(maxError)){
+    tooLargeErrors <- recomputedResult@bayesFactor$error > maxError
+    if(any(tooLargeErrors)){
+      warning("Exceeded maximum attempts (", maxAttempts, ") to reach estimation error threshold (", maxError, ") on ", sum(tooLargeErrors), " model(s).")
+    }
+    # if(preciseDenominatorModel) bfs = c(x@denominator,bfs)
+  }
+  return(recomputedResult)
 })
 
 
